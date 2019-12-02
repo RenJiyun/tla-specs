@@ -7,19 +7,19 @@
 
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
-\* The set of server IDs
+\* 代表所有的节点
 CONSTANTS Server
 
-\* The set of requests that can go into the log
+\* 代表可以进入日志的所有值
 CONSTANTS Value
 
-\* Server states.
+\* 代表节点的状态：跟随者，候选者，领导者
 CONSTANTS Follower, Candidate, Leader
 
 \* A reserved value.
 CONSTANTS Nil
 
-\* Message types:
+\* 消息类型
 CONSTANTS RequestVoteRequest, RequestVoteResponse,
           AppendEntriesRequest, AppendEntriesResponse
 
@@ -42,6 +42,15 @@ VARIABLE elections
 \* implementation.
 \* Keeps track of every log ever in the system (set of logs).
 VARIABLE allLogs
+
+
+
+
+
+
+
+
+
 
 ----
 \* The following variables are all per server (functions with domain Server).
@@ -91,9 +100,20 @@ leaderVars == <<nextIndex, matchIndex, elections>>
 \* All variables; used for stuttering (asserting state hasn't changed).
 vars == <<messages, allLogs, serverVars, candidateVars, leaderVars, logVars>>
 
-----
-\* Helpers
 
+
+
+
+
+
+
+
+
+----
+\* 帮助函数
+
+
+\* 定义法定集合
 \* The set of all quorums. This just calculates simple majorities, but the only
 \* important property is that every quorum overlaps with every other.
 Quorum == {i \in SUBSET(Server) : Cardinality(i) * 2 > Cardinality(Server)}
@@ -101,6 +121,8 @@ Quorum == {i \in SUBSET(Server) : Cardinality(i) * 2 > Cardinality(Server)}
 \* The term of the last entry in a log, or 0 if the log is empty.
 LastTerm(xlog) == IF Len(xlog) = 0 THEN 0 ELSE xlog[Len(xlog)].term
 
+
+\* 在msgs的基础上增加一个msg
 \* Helper for Send and Reply. Given a message m and bag of messages, return a
 \* new bag of messages with one more m in it.
 WithMessage(m, msgs) ==
@@ -109,6 +131,8 @@ WithMessage(m, msgs) ==
     ELSE
         msgs @@ (m :> 1)
 
+
+\* 在msgs的基础上去除一个msg
 \* Helper for Discard and Reply. Given a message m and bag of messages, return
 \* a new bag of messages with one less m in it.
 WithoutMessage(m, msgs) ==
@@ -117,40 +141,80 @@ WithoutMessage(m, msgs) ==
     ELSE
         msgs
 
+
+\* 发送消息就是在全局消息中增加一个消息
 \* Add a message to the bag of messages.
 Send(m) == messages' = WithMessage(m, messages)
 
+
+\* 去除一个消息就是在全局消息中去除一个消息
 \* Remove a message from the bag of messages. Used when a server is done
 \* processing a message.
 Discard(m) == messages' = WithoutMessage(m, messages)
 
+
+\* 回复消息是在全局消息中减少一个请求消息，但是增加一个响应消息
 \* Combination of Send and Discard
 Reply(response, request) ==
     messages' = WithoutMessage(request, WithMessage(response, messages))
+
 
 \* Return the minimum value from a set, or undefined if the set is empty.
 Min(s) == CHOOSE x \in s : \A y \in s : x <= y
 \* Return the maximum value from a set, or undefined if the set is empty.
 Max(s) == CHOOSE x \in s : \A y \in s : x >= y
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ----
 \* Define initial values for all variables
 
+\* 定义全局初始状态
 InitHistoryVars == /\ elections = {}
                    /\ allLogs   = {}
                    /\ voterLog  = [i \in Server |-> [j \in {} |-> <<>>]]
+                   
+                   
+\* 定义各个节点的初始状态
 InitServerVars == /\ currentTerm = [i \in Server |-> 1]
                   /\ state       = [i \in Server |-> Follower]
                   /\ votedFor    = [i \in Server |-> Nil]
+                  
+\* 定义候选者的初始状态                  
 InitCandidateVars == /\ votesResponded = [i \in Server |-> {}]
                      /\ votesGranted   = [i \in Server |-> {}]
+                     
+
+\* 定义领导者的初始状态
 \* The values nextIndex[i][i] and matchIndex[i][i] are never read, since the
 \* leader does not send itself messages. It's still easier to include these
 \* in the functions.
 InitLeaderVars == /\ nextIndex  = [i \in Server |-> [j \in Server |-> 1]]
                   /\ matchIndex = [i \in Server |-> [j \in Server |-> 0]]
+                  
+                  
+\* 定义节点日志和提交点的初始状态
 InitLogVars == /\ log          = [i \in Server |-> << >>]
                /\ commitIndex  = [i \in Server |-> 0]
+             
+               
+\* 定义初始状态
 Init == /\ messages = [m \in {} |-> 0]
         /\ InitHistoryVars
         /\ InitServerVars
@@ -158,38 +222,48 @@ Init == /\ messages = [m \in {} |-> 0]
         /\ InitLeaderVars
         /\ InitLogVars
 
-----
-\* Define state transitions
 
+
+
+
+----
+\* 定义状态转移函数的各个子函数
+
+
+\* 节点重启
 \* Server i restarts from stable storage.
 \* It loses everything but its currentTerm, votedFor, and log.
 Restart(i) ==
-    /\ state'          = [state EXCEPT ![i] = Follower]
-    /\ votesResponded' = [votesResponded EXCEPT ![i] = {}]
-    /\ votesGranted'   = [votesGranted EXCEPT ![i] = {}]
-    /\ voterLog'       = [voterLog EXCEPT ![i] = [j \in {} |-> <<>>]]
-    /\ nextIndex'      = [nextIndex EXCEPT ![i] = [j \in Server |-> 1]]
-    /\ matchIndex'     = [matchIndex EXCEPT ![i] = [j \in Server |-> 0]]
-    /\ commitIndex'    = [commitIndex EXCEPT ![i] = 0]
+    /\ state'          = [state EXCEPT ![i] = Follower]                     \* 状态变更为跟随者
+    /\ votesResponded' = [votesResponded EXCEPT ![i] = {}]                  \* 清空该节点投票响应记录
+    /\ votesGranted'   = [votesGranted EXCEPT ![i] = {}]                    \* 清空该节点的投票授予记录
+    /\ voterLog'       = [voterLog EXCEPT ![i] = [j \in {} |-> <<>>]]       \* 清空投票日志
+    /\ nextIndex'      = [nextIndex EXCEPT ![i] = [j \in Server |-> 1]]     \* 重置nextIndex
+    /\ matchIndex'     = [matchIndex EXCEPT ![i] = [j \in Server |-> 0]]    \* 重置matchIndex
+    /\ commitIndex'    = [commitIndex EXCEPT ![i] = 0]                      \* 重置commitIndex
     /\ UNCHANGED <<messages, currentTerm, votedFor, log, elections>>
 
+
+\* 节点超时，开启新一轮的投票
 \* Server i times out and starts a new election.
 Timeout(i) == /\ state[i] \in {Follower, Candidate}
-              /\ state' = [state EXCEPT ![i] = Candidate]
-              /\ currentTerm' = [currentTerm EXCEPT ![i] = currentTerm[i] + 1]
+              /\ state' = [state EXCEPT ![i] = Candidate]                           \* 变更状态为候选者
+              /\ currentTerm' = [currentTerm EXCEPT ![i] = currentTerm[i] + 1]      \* 任期号自增1
               \* Most implementations would probably just set the local vote
               \* atomically, but messaging localhost for it is weaker.
-              /\ votedFor' = [votedFor EXCEPT ![i] = Nil]
-              /\ votesResponded' = [votesResponded EXCEPT ![i] = {}]
-              /\ votesGranted'   = [votesGranted EXCEPT ![i] = {}]
-              /\ voterLog'       = [voterLog EXCEPT ![i] = [j \in {} |-> <<>>]]
+              /\ votedFor' = [votedFor EXCEPT ![i] = Nil]                           
+              /\ votesResponded' = [votesResponded EXCEPT ![i] = {}]                \* 清空该节点的投票响应记录
+              /\ votesGranted'   = [votesGranted EXCEPT ![i] = {}]                  
+              /\ voterLog'       = [voterLog EXCEPT ![i] = [j \in {} |-> <<>>]]     \* 重置投票日志
               /\ UNCHANGED <<messages, leaderVars, logVars>>
 
+
+\* 节点i向节点j发送投票请求
 \* Candidate i sends j a RequestVote request.
 RequestVote(i, j) ==
     /\ state[i] = Candidate
-    /\ j \notin votesResponded[i]
-    /\ Send([mtype         |-> RequestVoteRequest,
+    /\ j \notin votesResponded[i]                            \* 节点j尚未给出过该轮投票的响应
+    /\ Send([mtype         |-> RequestVoteRequest,           \* 发送消息
              mterm         |-> currentTerm[i],
              mlastLogTerm  |-> LastTerm(log[i]),
              mlastLogIndex |-> Len(log[i]),
@@ -224,16 +298,18 @@ AppendEntries(i, j) ==
                 mdest          |-> j])
     /\ UNCHANGED <<serverVars, candidateVars, leaderVars, logVars>>
 
+
+\* 节点成为领导者
 \* Candidate i transitions to leader.
 BecomeLeader(i) ==
     /\ state[i] = Candidate
-    /\ votesGranted[i] \in Quorum
-    /\ state'      = [state EXCEPT ![i] = Leader]
-    /\ nextIndex'  = [nextIndex EXCEPT ![i] =
+    /\ votesGranted[i] \in Quorum                                      \* 获取法定人数的选票
+    /\ state'      = [state EXCEPT ![i] = Leader]                     \* 变更状态为领导者
+    /\ nextIndex'  = [nextIndex EXCEPT ![i] =                         \* 设置nextIndex，设置为自己的日志数+1
                          [j \in Server |-> Len(log[i]) + 1]]
-    /\ matchIndex' = [matchIndex EXCEPT ![i] =
+    /\ matchIndex' = [matchIndex EXCEPT ![i] =                         \* 将所有的matchIndex设置为0，之后会进行沟通
                          [j \in Server |-> 0]]
-    /\ elections'  = elections \cup
+    /\ elections'  = elections \cup                                     \* 将此次选举加入成功选举的集合中
                          {[eterm     |-> currentTerm[i],
                            eleader   |-> i,
                            elog      |-> log[i],
@@ -241,10 +317,14 @@ BecomeLeader(i) ==
                            evoterLog |-> voterLog[i]]}
     /\ UNCHANGED <<messages, currentTerm, votedFor, candidateVars, logVars>>
 
+
+\* 接受客户端请求
+\* 规格有一个好处：它跟时间无关，比如在具体的实现中，处理客户端请求，在领导者节点追加完日志后，
+\* 接下来一定会向跟随者进行日志复制，但是规格没有这种连续性，而这恰恰很好的刻画了并行性
 \* Leader i receives a client request to add v to the log.
 ClientRequest(i, v) ==
-    /\ state[i] = Leader
-    /\ LET entry == [term  |-> currentTerm[i],
+    /\ state[i] = Leader                                           \* 只有领导者才可以接受客户端请求
+    /\ LET entry == [term  |-> currentTerm[i],                     \* 追加日志
                      value |-> v]
            newLog == Append(log[i], entry)
        IN  log' = [log EXCEPT ![i] = newLog]
@@ -274,8 +354,11 @@ AdvanceCommitIndex(i) ==
        IN commitIndex' = [commitIndex EXCEPT ![i] = newCommitIndex]
     /\ UNCHANGED <<messages, serverVars, candidateVars, leaderVars, log>>
 
+
+
+
 ----
-\* Message handlers
+\* 消息处理器
 \* i = recipient, j = sender, m = message
 
 \* Server i receives a RequestVote request from server j with
@@ -448,7 +531,16 @@ DropMessage(m) ==
     /\ UNCHANGED <<serverVars, candidateVars, leaderVars, logVars>>
 
 ----
-\* Defines how the variables may transition.
+\* 定义状态转移函数
+\* 有以下几种情形会发生状态的转移：
+\* 1. 有节点重启
+\* 2. 有节点超时
+\* 3. 有节点发送投票请求
+\* 4. 有节点成为新的领导者
+\* 5. 有客户端请求
+\* 6. 推进提交点
+\* 7. 追加日志
+\* 8. 收到消息
 Next == /\ \/ \E i \in Server : Restart(i)
            \/ \E i \in Server : Timeout(i)
            \/ \E i,j \in Server : RequestVote(i, j)
