@@ -68,6 +68,8 @@ serverVars == <<currentTerm, state, votedFor>>
 \* log entry. Unfortunately, the Sequence module defines Head(s) as the entry
 \* with index 1, so be careful not to use that!
 VARIABLE log
+
+\* 记录每一个节点已经应用过的日志记录点
 \* The index of the latest entry in the log the state machine may apply.
 VARIABLE commitIndex
 logVars == <<log, commitIndex>>
@@ -258,7 +260,15 @@ Timeout(i) == /\ state[i] \in {Follower, Candidate}
               /\ UNCHANGED <<messages, leaderVars, logVars>>
 
 
+
 \* 节点i向节点j发送投票请求
+\* 消息报文结构为：
+\* 1. 消息类型
+\* 2. 发送方的任期号
+\* 3. 最后一条日志的任期号
+\* 4. 最后一条日志的index
+\* 5. 发送方标识
+\* 6. 接收方标识
 \* Candidate i sends j a RequestVote request.
 RequestVote(i, j) ==
     /\ state[i] = Candidate
@@ -331,14 +341,16 @@ ClientRequest(i, v) ==
     /\ UNCHANGED <<messages, serverVars, candidateVars,
                    leaderVars, commitIndex>>
 
+
+\* 向前移动提交点
 \* Leader i advances its commitIndex.
 \* This is done as a separate step from handling AppendEntries responses,
 \* in part to minimize atomic regions, and in part so that leaders of
 \* single-server clusters are able to mark entries committed.
 AdvanceCommitIndex(i) ==
-    /\ state[i] = Leader
+    /\ state[i] = Leader                                                             
     /\ LET \* The set of servers that agree up through index.
-           Agree(index) == {i} \cup {k \in Server :
+           Agree(index) == {i} \cup {k \in Server :                                      \* 定义Agree函数
                                          matchIndex[i][k] >= index}
            \* The maximum indexes for which a quorum agrees
            agreeIndexes == {index \in 1..Len(log[i]) :
@@ -361,13 +373,17 @@ AdvanceCommitIndex(i) ==
 \* 消息处理器
 \* i = recipient, j = sender, m = message
 
+
+\* 处理投票消息：节点j将消息m发送给节点i
 \* Server i receives a RequestVote request from server j with
 \* m.mterm <= currentTerm[i].
 HandleRequestVoteRequest(i, j, m) ==
-    LET logOk == \/ m.mlastLogTerm > LastTerm(log[i])
+    LET logOk == \/ m.mlastLogTerm > LastTerm(log[i])             
                  \/ /\ m.mlastLogTerm = LastTerm(log[i])
                     /\ m.mlastLogIndex >= Len(log[i])
-        grant == /\ m.mterm = currentTerm[i]
+                    
+        \* 计算是否授予选票：1. 
+        grant == /\ m.mterm = currentTerm[i]                                    
                  /\ logOk
                  /\ votedFor[i] \in {Nil, j}
     IN /\ m.mterm <= currentTerm[i]
@@ -384,6 +400,9 @@ HandleRequestVoteRequest(i, j, m) ==
                  m)
        /\ UNCHANGED <<state, currentTerm, candidateVars, leaderVars, logVars>>
 
+
+
+\* 处理投票响应消息
 \* Server i receives a RequestVote response from server j with
 \* m.mterm = currentTerm[i].
 HandleRequestVoteResponse(i, j, m) ==
@@ -402,6 +421,9 @@ HandleRequestVoteResponse(i, j, m) ==
     /\ Discard(m)
     /\ UNCHANGED <<serverVars, votedFor, leaderVars, logVars>>
 
+
+
+\* 处理日志复制消息
 \* Server i receives an AppendEntries request from server j with
 \* m.mterm <= currentTerm[i]. This just handles m.entries of length 0 or 1, but
 \* implementations could safely accept more by treating them the same as
